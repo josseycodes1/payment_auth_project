@@ -141,8 +141,6 @@ LOGGING = {
 }
 
 # Static files (CSS, JavaScript, Images)
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'  # Add this line - for collectstatic
-STATICFILES_DIRS = [
-    BASE_DIR / 'static',  # For your custom static files
-]
+STATICFILES_DIRS = []
