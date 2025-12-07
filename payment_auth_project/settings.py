@@ -77,7 +77,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:8001/api/v1/auth/google/callback')
+GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:8001/auth/google/callback')
 
 # Paystack Configuration
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY')
@@ -139,3 +139,10 @@ LOGGING = {
         },
     },
 }
+
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # Add this line - for collectstatic
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',  # For your custom static files
+]

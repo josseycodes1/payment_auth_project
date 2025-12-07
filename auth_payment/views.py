@@ -22,16 +22,26 @@ class GoogleAuthInitiateView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        """Return Google OAuth URL in JSON response"""
+        """Return Google OAuth URL in JSON response OR redirect"""
         try:
             auth_url = GoogleAuthHelper.get_auth_url()
-            return Response(
-                ResponseHelper.success_response(
-                    data={'google_auth_url': auth_url},
-                    message="Google authentication URL generated"
-                ),
-                status=status.HTTP_200_OK
-            )
+            
+            # Check if client wants JSON response or redirect
+            accept_header = request.headers.get('Accept', '')
+            
+            if 'application/json' in accept_header or request.GET.get('format') == 'json':
+                # SPECIFICATION: Return JSON with URL
+                return Response(
+                    ResponseHelper.success_response(
+                        data={'google_auth_url': auth_url},
+                        message="Google authentication URL generated"
+                    ),
+                    status=status.HTTP_200_OK
+                )
+            else:
+                # SPECIFICATION: Return 302 redirect to Google OAuth URL
+                return redirect(auth_url)
+                
         except Exception as e:
             logger.error(f"Error generating Google auth URL: {str(e)}")
             return Response(
@@ -106,10 +116,14 @@ class GoogleAuthCallbackView(APIView):
             action = "created" if created else "updated"
             logger.info(f"User {action}: {user.email}")
             
-            serializer = UserSerializer(user)
+            # SPECIFICATION: Return 200 with user_id, email, name
             return Response(
                 ResponseHelper.success_response(
-                    data=serializer.data,
+                    data={
+                        'user_id': str(user.id),
+                        'email': user.email,
+                        'name': user.name
+                    },
                     message=f"User authentication successful"
                 ),
                 status=status.HTTP_200_OK
@@ -130,43 +144,63 @@ class PaystackInitiatePaymentView(APIView):
     
     def post(self, request):
         """Initiate Paystack payment"""
-        serializer = PaymentInitiateSerializer(data=request.data)
+        # SPECIFICATION: Expect amount in request body
+        amount = request.data.get('amount')
         
-        if not serializer.is_valid():
-            logger.warning(f"Invalid payment initiation data: {serializer.errors}")
+        if not amount:
+            logger.warning("Amount is required")
             return Response(
                 ResponseHelper.error_response(
-                    message="Invalid input data",
-                    errors=serializer.errors
+                    message="Amount is required"
                 ),
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            data = serializer.validated_data
-            user_id = data['user_id']
-            amount = data['amount']
-            
-            # Check if user exists
-            try:
-                user = User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                logger.warning(f"User not found: {user_id}")
+            # Convert to integer and validate
+            amount = int(amount)
+            if amount < 100:  # Minimum 100 Kobo (1 NGN)
                 return Response(
                     ResponseHelper.error_response(
-                        message="User not found"
+                        message="Amount must be at least 100 Kobo (1 NGN)"
                     ),
-                    status=status.HTTP_404_NOT_FOUND
+                    status=status.HTTP_400_BAD_REQUEST
                 )
+            
+            # Get user from authenticated request or request data
+            user_id = request.data.get('user_id')
+            if not user_id:
+                # If no user_id in request, try to get from authenticated user
+                if hasattr(request, 'user') and request.user.is_authenticated:
+                    user = request.user
+                else:
+                    return Response(
+                        ResponseHelper.error_response(
+                            message="User authentication required"
+                        ),
+                        status=status.HTTP_401_UNAUTHORIZED
+                    )
+            else:
+                # Check if user exists
+                try:
+                    user = User.objects.get(id=user_id)
+                except User.DoesNotExist:
+                    logger.warning(f"User not found: {user_id}")
+                    return Response(
+                        ResponseHelper.error_response(
+                            message="User not found"
+                        ),
+                        status=status.HTTP_404_NOT_FOUND
+                    )
             
             # Check for duplicate transaction (idempotency)
             # Generate a reference using user_id and timestamp
-            reference = f"TXN_{user_id}_{int(timezone.now().timestamp())}"
+            reference = f"TXN_{user.id}_{int(timezone.now().timestamp())}"
             
             existing_transaction = Transaction.objects.filter(
                 reference=reference,
                 user=user,
-                amount=amount
+                amount=amount / 100  # Convert from Kobo to Naira
             ).first()
             
             if existing_transaction:
@@ -188,7 +222,7 @@ class PaystackInitiatePaymentView(APIView):
                 email=user.email,
                 reference=reference,
                 metadata={
-                    'user_id': str(user_id),
+                    'user_id': str(user.id),
                     'user_name': user.name
                 }
             )
@@ -221,19 +255,26 @@ class PaystackInitiatePaymentView(APIView):
             
             logger.info(f"Payment initiated successfully: {reference}")
             
+            # SPECIFICATION: Return 201 with reference and authorization_url
             return Response(
                 ResponseHelper.success_response(
                     data={
                         'reference': transaction.reference,
-                        'authorization_url': transaction.authorization_url,
-                        'amount': amount,
-                        'currency': 'NGN'
+                        'authorization_url': transaction.authorization_url
                     },
                     message="Payment initialized successfully"
                 ),
                 status=status.HTTP_201_CREATED
             )
             
+        except ValueError:
+            logger.warning(f"Invalid amount format: {request.data.get('amount')}")
+            return Response(
+                ResponseHelper.error_response(
+                    message="Amount must be a valid number"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Payment initiation error: {str(e)}")
             return Response(
@@ -356,10 +397,15 @@ class TransactionStatusView(APIView):
                         transaction.save()
                         logger.info(f"Transaction {reference} verified as {transaction.status}")
             
-            serializer = TransactionSerializer(transaction)
+            # SPECIFICATION: Return 200 with reference, status, amount, paid_at
             return Response(
                 ResponseHelper.success_response(
-                    data=serializer.data,
+                    data={
+                        'reference': transaction.reference,
+                        'status': transaction.status,
+                        'amount': int(transaction.amount * 100),  # Convert to Kobo
+                        'paid_at': transaction.paid_at.isoformat() if transaction.paid_at else None
+                    },
                     message="Transaction status retrieved"
                 ),
                 status=status.HTTP_200_OK

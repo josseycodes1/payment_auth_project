@@ -16,7 +16,7 @@ class GoogleAuthHelper:
         
         if not redirect_uri and hasattr(settings, 'BASE_URL'):
             base_url = settings.BASE_URL
-            redirect_uri = f"{base_url}/api/v1/auth/google/callback"
+            redirect_uri = f"{base_url}/auth/google/callback"
         
         params = {
             'client_id': settings.GOOGLE_CLIENT_ID,
@@ -55,6 +55,23 @@ class GoogleAuthHelper:
         
         if response.status_code != 200:
             logger.error(f"Google token exchange failed: {response.status_code} - {response.text}")
+            return None
+        
+        return response.json()
+    
+    @staticmethod
+    def get_user_info(access_token):
+        """Fetch user info from Google using access token"""
+        userinfo_url = 'https://www.googleapis.com/oauth2/v3/userinfo'
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+        }
+        
+        logger.info("Fetching user info from Google")
+        response = requests.get(userinfo_url, headers=headers)
+        
+        if response.status_code != 200:
+            logger.error(f"Google userinfo failed: {response.status_code} - {response.text}")
             return None
         
         return response.json()
