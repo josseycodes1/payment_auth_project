@@ -12,9 +12,15 @@ class GoogleAuthHelper:
     @staticmethod
     def get_auth_url():
         """Generate Google OAuth URL"""
+        redirect_uri = settings.GOOGLE_REDIRECT_URI
+        
+        if not redirect_uri and hasattr(settings, 'BASE_URL'):
+            base_url = settings.BASE_URL
+            redirect_uri = f"{base_url}/api/v1/auth/google/callback"
+        
         params = {
             'client_id': settings.GOOGLE_CLIENT_ID,
-            'redirect_uri': settings.GOOGLE_REDIRECT_URI,
+            'redirect_uri': redirect_uri,
             'response_type': 'code',
             'scope': 'openid email profile',
             'access_type': 'offline',
@@ -22,41 +28,33 @@ class GoogleAuthHelper:
         }
         
         auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
-        logger.info(f"Generated Google auth URL: {auth_url[:100]}...")
+        logger.info(f"Generated Google auth URL with redirect_uri: {redirect_uri}")
         return auth_url
 
     @staticmethod
     def exchange_code_for_token(code):
         """Exchange authorization code for access token"""
         token_url = 'https://oauth2.googleapis.com/token'
+        
+        # Get redirect URI from settings
+        redirect_uri = settings.GOOGLE_REDIRECT_URI
+        if not redirect_uri and hasattr(settings, 'BASE_URL'):
+            base_url = settings.BASE_URL
+            redirect_uri = f"{base_url}/api/v1/auth/google/callback"
+        
         data = {
             'code': code,
             'client_id': settings.GOOGLE_CLIENT_ID,
             'client_secret': settings.GOOGLE_CLIENT_SECRET,
-            'redirect_uri': settings.GOOGLE_REDIRECT_URI,
+            'redirect_uri': redirect_uri,
             'grant_type': 'authorization_code',
         }
         
-        logger.info("Exchanging code for token with Google")
+        logger.info(f"Exchanging code for token with redirect_uri: {redirect_uri}")
         response = requests.post(token_url, data=data)
         
         if response.status_code != 200:
             logger.error(f"Google token exchange failed: {response.status_code} - {response.text}")
-            return None
-        
-        return response.json()
-
-    @staticmethod
-    def get_user_info(access_token):
-        """Get user info from Google using access token"""
-        userinfo_url = 'https://www.googleapis.com/oauth2/v3/userinfo'
-        headers = {'Authorization': f'Bearer {access_token}'}
-        
-        logger.info("Fetching user info from Google")
-        response = requests.get(userinfo_url, headers=headers)
-        
-        if response.status_code != 200:
-            logger.error(f"Failed to fetch user info: {response.status_code}")
             return None
         
         return response.json()
