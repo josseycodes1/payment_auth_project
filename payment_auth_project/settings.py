@@ -140,7 +140,6 @@ LOGGING = {
     },
 }
 
-# Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'  # Add this line - for collectstatic
+STATIC_ROOT = BASE_DIR / 'staticfiles'  
 STATICFILES_DIRS = []
