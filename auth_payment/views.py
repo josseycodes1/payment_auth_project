@@ -7,6 +7,8 @@ from rest_framework.permissions import AllowAny
 from django.shortcuts import redirect
 from django.db import transaction as db_transaction
 from django.utils import timezone
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from .models import User, Transaction
 from .serializers import (
@@ -142,59 +144,90 @@ class GoogleAuthCallbackView(APIView):
 
 class PaystackInitiatePaymentView(APIView):
     
+    @swagger_auto_schema(
+        operation_description="Initiate Paystack payment",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['amount'],
+            properties={
+                'amount': openapi.Schema(
+                    type=openapi.TYPE_INTEGER,
+                    description='Amount in Kobo (minimum 100 Kobo = 1 NGN)',
+                    minimum=100,
+                    example=5000
+                )
+            }
+        ),
+        responses={
+            201: openapi.Response(
+                description='Payment initialized successfully',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'data': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'reference': openapi.Schema(type=openapi.TYPE_STRING),
+                                'authorization_url': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        )
+                    }
+                )
+            ),
+            400: openapi.Response(description='Invalid input'),
+            402: openapi.Response(description='Payment initialization failed by Paystack'),
+            500: openapi.Response(description='Internal server error')
+        }
+    )
     def post(self, request):
         """Initiate Paystack payment"""
-        # SPECIFICATION: Expect amount in request body
-        amount = request.data.get('amount')
+        # Use serializer for validation
+        serializer = PaymentInitiateSerializer(data=request.data)
         
-        if not amount:
-            logger.warning("Amount is required")
+        if not serializer.is_valid():
             return Response(
                 ResponseHelper.error_response(
-                    message="Amount is required"
+                    message="Invalid input",
+                    errors=serializer.errors
                 ),
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        amount = serializer.validated_data['amount']
+        
         try:
-            # Convert to integer and validate
-            amount = int(amount)
-            if amount < 100:  # Minimum 100 Kobo (1 NGN)
-                return Response(
-                    ResponseHelper.error_response(
-                        message="Amount must be at least 100 Kobo (1 NGN)"
-                    ),
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Get user from authenticated request
+            # SPECIFICATION: The user should be authenticated somehow
+            # For now, we'll get the first user as a fallback
+            user = None
             
-            # Get user from authenticated request or request data
-            user_id = request.data.get('user_id')
-            if not user_id:
-                # If no user_id in request, try to get from authenticated user
-                if hasattr(request, 'user') and request.user.is_authenticated:
-                    user = request.user
-                else:
+            # Option 1: Get user from authenticated request
+            if hasattr(request, 'user') and request.user.is_authenticated:
+                user = request.user
+            
+            # Option 2: For testing, get the first user from database
+            # This is a temporary solution for testing without authentication
+            if not user:
+                try:
+                    user = User.objects.first()
+                    if not user:
+                        return Response(
+                            ResponseHelper.error_response(
+                                message="No users found. Please authenticate first via Google OAuth."
+                            ),
+                            status=status.HTTP_401_UNAUTHORIZED
+                        )
+                except User.DoesNotExist:
                     return Response(
                         ResponseHelper.error_response(
-                            message="User authentication required"
+                            message="User authentication required. Please authenticate first via Google OAuth."
                         ),
                         status=status.HTTP_401_UNAUTHORIZED
                     )
-            else:
-                # Check if user exists
-                try:
-                    user = User.objects.get(id=user_id)
-                except User.DoesNotExist:
-                    logger.warning(f"User not found: {user_id}")
-                    return Response(
-                        ResponseHelper.error_response(
-                            message="User not found"
-                        ),
-                        status=status.HTTP_404_NOT_FOUND
-                    )
             
             # Check for duplicate transaction (idempotency)
-            # Generate a reference using user_id and timestamp
             reference = f"TXN_{user.id}_{int(timezone.now().timestamp())}"
             
             existing_transaction = Transaction.objects.filter(
@@ -267,14 +300,6 @@ class PaystackInitiatePaymentView(APIView):
                 status=status.HTTP_201_CREATED
             )
             
-        except ValueError:
-            logger.warning(f"Invalid amount format: {request.data.get('amount')}")
-            return Response(
-                ResponseHelper.error_response(
-                    message="Amount must be a valid number"
-                ),
-                status=status.HTTP_400_BAD_REQUEST
-            )
         except Exception as e:
             logger.error(f"Payment initiation error: {str(e)}")
             return Response(
@@ -367,6 +392,57 @@ class PaystackWebhookView(APIView):
 
 class TransactionStatusView(APIView):
     
+    @swagger_auto_schema(
+        operation_description="Check transaction status",
+        manual_parameters=[
+            openapi.Parameter(
+                'reference',
+                openapi.IN_PATH,
+                description="Transaction reference",
+                type=openapi.TYPE_STRING,
+                required=True,
+                example="TXN_68c4808d-a9a1-4708-b8a2-cbfa7911c0e3_1733650123"
+            ),
+            openapi.Parameter(
+                'refresh',
+                openapi.IN_QUERY,
+                description="Force refresh from Paystack (true/false)",
+                type=openapi.TYPE_BOOLEAN,
+                required=False,
+                default=False
+            )
+        ],
+        responses={
+            200: openapi.Response(
+                description='Transaction status retrieved',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'data': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'reference': openapi.Schema(type=openapi.TYPE_STRING),
+                                'status': openapi.Schema(
+                                    type=openapi.TYPE_STRING,
+                                    enum=['pending', 'success', 'failed', 'abandoned']
+                                ),
+                                'amount': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                'paid_at': openapi.Schema(
+                                    type=openapi.TYPE_STRING,
+                                    format='date-time',
+                                    nullable=True
+                                )
+                            }
+                        )
+                    }
+                )
+            ),
+            404: openapi.Response(description='Transaction not found'),
+            500: openapi.Response(description='Internal server error')
+        }
+    )
     def get(self, request, reference):
         """Check transaction status"""
         refresh = request.GET.get('refresh', 'false').lower() == 'true'
@@ -433,6 +509,24 @@ class TransactionStatusView(APIView):
 class TransactionListView(APIView):
     """List transactions for a user (bonus endpoint)"""
     
+    @swagger_auto_schema(
+        operation_description="List transactions for a user",
+        manual_parameters=[
+            openapi.Parameter(
+                'user_id',
+                openapi.IN_QUERY,
+                description="User ID",
+                type=openapi.TYPE_STRING,
+                required=True,
+                example="68c4808d-a9a1-4708-b8a2-cbfa7911c0e3"
+            )
+        ],
+        responses={
+            200: openapi.Response(description='Transactions retrieved successfully'),
+            400: openapi.Response(description='user_id is required'),
+            500: openapi.Response(description='Internal server error')
+        }
+    )
     def get(self, request):
         user_id = request.GET.get('user_id')
         

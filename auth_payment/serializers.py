@@ -23,8 +23,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         ]
 
 class PaymentInitiateSerializer(serializers.Serializer):
-    amount = serializers.IntegerField(min_value=100)  # Minimum 100 Kobo (1 NGN)
-    user_id = serializers.UUIDField()
+    amount = serializers.IntegerField(min_value=100, help_text="Amount in Kobo (minimum 100 Kobo = 1 NGN)")
     
     def validate_amount(self, value):
         if value < 100:

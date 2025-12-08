@@ -143,7 +143,7 @@ bash
 # 3. Google will redirect to: http://localhost:8001/auth/google/callback?code=AUTHORIZATION_CODE
 # 4. Replace YOUR_GOOGLE_AUTH_CODE with actual code from browser URL
 
-curl -X GET "http://localhost:8001/auth/google/callback?code=YOUR_GOOGLE_AUTH_CODE" \
+curl -X GET "http://localhost:8001/auth/google/callback?code=4%2F0ATX87lMdfyqHVS3kBEFKEMHnRfZ0NwZeTcu93BKmrk3ZLfBeWOzUgFoOwMimwb8BP7JChA" \
      -H "Content-Type: application/json"
 
      
