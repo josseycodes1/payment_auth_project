@@ -9,6 +9,7 @@ from django.db import transaction as db_transaction
 from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from datetime import timedelta
 
 from .models import User, Transaction
 from .serializers import (
@@ -28,11 +29,11 @@ class GoogleAuthInitiateView(APIView):
         try:
             auth_url = GoogleAuthHelper.get_auth_url()
             
-            # Check if client wants JSON response or redirect
+            
             accept_header = request.headers.get('Accept', '')
             
             if 'application/json' in accept_header or request.GET.get('format') == 'json':
-                # SPECIFICATION: Return JSON with URL
+               
                 return Response(
                     ResponseHelper.success_response(
                         data={'google_auth_url': auth_url},
@@ -41,7 +42,7 @@ class GoogleAuthInitiateView(APIView):
                     status=status.HTTP_200_OK
                 )
             else:
-                # SPECIFICATION: Return 302 redirect to Google OAuth URL
+                
                 return redirect(auth_url)
                 
         except Exception as e:
@@ -82,7 +83,7 @@ class GoogleAuthCallbackView(APIView):
             )
         
         try:
-            # Exchange code for token
+           
             token_data = GoogleAuthHelper.exchange_code_for_token(code)
             if not token_data:
                 logger.error("Failed to exchange code for token")
@@ -93,7 +94,7 @@ class GoogleAuthCallbackView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED
                 )
             
-            # Get user info
+            
             user_info = GoogleAuthHelper.get_user_info(token_data['access_token'])
             if not user_info:
                 logger.error("Failed to fetch user info from Google")
@@ -104,7 +105,7 @@ class GoogleAuthCallbackView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
             
-            # Create or update user
+            
             with db_transaction.atomic():
                 user, created = User.objects.update_or_create(
                     google_id=user_info.get('sub'),
@@ -118,7 +119,7 @@ class GoogleAuthCallbackView(APIView):
             action = "created" if created else "updated"
             logger.info(f"User {action}: {user.email}")
             
-            # SPECIFICATION: Return 200 with user_id, email, name
+            
             return Response(
                 ResponseHelper.success_response(
                     data={
@@ -183,7 +184,7 @@ class PaystackInitiatePaymentView(APIView):
     )
     def post(self, request):
         """Initiate Paystack payment"""
-        # Use serializer for validation
+        
         serializer = PaymentInitiateSerializer(data=request.data)
         
         if not serializer.is_valid():
@@ -198,17 +199,11 @@ class PaystackInitiatePaymentView(APIView):
         amount = serializer.validated_data['amount']
         
         try:
-            # Get user from authenticated request
-            # SPECIFICATION: The user should be authenticated somehow
-            # For now, we'll get the first user as a fallback
-            user = None
             
-            # Option 1: Get user from authenticated request
+            user = None
             if hasattr(request, 'user') and request.user.is_authenticated:
                 user = request.user
             
-            # Option 2: For testing, get the first user from database
-            # This is a temporary solution for testing without authentication
             if not user:
                 try:
                     user = User.objects.first()
@@ -227,17 +222,19 @@ class PaystackInitiatePaymentView(APIView):
                         status=status.HTTP_401_UNAUTHORIZED
                     )
             
-            # Check for duplicate transaction (idempotency)
+            
             reference = f"TXN_{user.id}_{int(timezone.now().timestamp())}"
             
+            time_threshold = timezone.now() - timedelta(minutes=5)
             existing_transaction = Transaction.objects.filter(
-                reference=reference,
                 user=user,
-                amount=amount / 100  # Convert from Kobo to Naira
-            ).first()
-            
+                amount=amount / 100,
+                status='pending',
+                created_at__gte=time_threshold
+            ).order_by('-created_at').first()
+
             if existing_transaction:
-                logger.info(f"Duplicate transaction detected, returning existing: {reference}")
+                logger.info(f"Duplicate transaction detected, returning existing: {existing_transaction.reference}")
                 return Response(
                     ResponseHelper.success_response(
                         data={
@@ -249,7 +246,7 @@ class PaystackInitiatePaymentView(APIView):
                     status=status.HTTP_200_OK
                 )
             
-            # Initialize Paystack transaction
+            
             paystack_response = PaystackHelper.initialize_transaction(
                 amount=amount,
                 email=user.email,
@@ -269,11 +266,11 @@ class PaystackInitiatePaymentView(APIView):
                     status=status.HTTP_402_PAYMENT_REQUIRED
                 )
             
-            # Save transaction
+            
             transaction = Transaction.objects.create(
                 reference=reference,
                 user=user,
-                amount=amount / 100,  # Convert from Kobo to Naira
+                amount=amount / 100,  
                 paystack_reference=paystack_response.get('reference'),
                 authorization_url=paystack_response.get('authorization_url'),
                 status='pending',
@@ -288,7 +285,7 @@ class PaystackInitiatePaymentView(APIView):
             
             logger.info(f"Payment initiated successfully: {reference}")
             
-            # SPECIFICATION: Return 201 with reference and authorization_url
+            
             return Response(
                 ResponseHelper.success_response(
                     data={
@@ -316,7 +313,7 @@ class PaystackWebhookView(APIView):
     
     def post(self, request):
         """Handle Paystack webhook notifications"""
-        # Get signature from header
+        
         signature = request.headers.get('x-paystack-signature')
         
         if not signature:
@@ -326,7 +323,7 @@ class PaystackWebhookView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate signature
+        
         if not PaystackHelper.validate_webhook_signature(request.data, signature):
             logger.warning("Invalid webhook signature")
             return Response(
@@ -343,11 +340,11 @@ class PaystackWebhookView(APIView):
             if event == 'charge.success':
                 reference = data.get('reference')
                 
-                # Find transaction
+                
                 try:
                     transaction = Transaction.objects.get(paystack_reference=reference)
                     
-                    # Update transaction
+                    
                     transaction.status = 'success'
                     transaction.paid_at = timezone.now()
                     transaction.metadata['webhook_data'] = data
@@ -357,7 +354,7 @@ class PaystackWebhookView(APIView):
                     
                 except Transaction.DoesNotExist:
                     logger.warning(f"Transaction not found for webhook reference: {reference}")
-                    # Optionally create a new transaction record
+                    
                     pass
                     
             elif event in ['charge.failed', 'charge.abandoned']:
@@ -375,7 +372,7 @@ class PaystackWebhookView(APIView):
                     logger.warning(f"Transaction not found for failed webhook: {reference}")
             
             return Response(
-                ResponseHelper.success_response(message="Webhook processed"),
+                {"status": True}, 
                 status=status.HTTP_200_OK
             )
             
@@ -448,17 +445,17 @@ class TransactionStatusView(APIView):
         refresh = request.GET.get('refresh', 'false').lower() == 'true'
         
         try:
-            # Find transaction
+           
             transaction = Transaction.objects.get(reference=reference)
             
             if refresh or transaction.status == 'pending':
-                # Verify with Paystack
+               
                 paystack_data = PaystackHelper.verify_transaction(
                     transaction.paystack_reference or transaction.reference
                 )
                 
                 if paystack_data:
-                    # Update transaction based on Paystack response
+                   
                     paystack_status = paystack_data.get('status')
                     
                     if paystack_status == 'success' and transaction.status != 'success':
@@ -473,13 +470,13 @@ class TransactionStatusView(APIView):
                         transaction.save()
                         logger.info(f"Transaction {reference} verified as {transaction.status}")
             
-            # SPECIFICATION: Return 200 with reference, status, amount, paid_at
+            
             return Response(
                 ResponseHelper.success_response(
                     data={
                         'reference': transaction.reference,
                         'status': transaction.status,
-                        'amount': int(transaction.amount * 100),  # Convert to Kobo
+                        'amount': int(transaction.amount * 100), 
                         'paid_at': transaction.paid_at.isoformat() if transaction.paid_at else None
                     },
                     message="Transaction status retrieved"

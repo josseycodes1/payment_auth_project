@@ -36,11 +36,11 @@ class GoogleAuthHelper:
         """Exchange authorization code for access token"""
         token_url = 'https://oauth2.googleapis.com/token'
         
-        # Get redirect URI from settings
+       
         redirect_uri = settings.GOOGLE_REDIRECT_URI
         if not redirect_uri and hasattr(settings, 'BASE_URL'):
             base_url = settings.BASE_URL
-            redirect_uri = f"{base_url}/api/v1/auth/google/callback"
+            redirect_uri = f"{base_url}/auth/google/callback"
         
         data = {
             'code': code,
