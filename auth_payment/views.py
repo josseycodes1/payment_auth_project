@@ -10,6 +10,7 @@ from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from datetime import timedelta
+from django.conf import settings
 
 from .models import User, Transaction
 from .serializers import (
@@ -28,6 +29,14 @@ class GoogleAuthInitiateView(APIView):
         """Return Google OAuth URL in JSON response OR redirect"""
         try:
             auth_url = GoogleAuthHelper.get_auth_url()
+            
+            if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_REDIRECT_URI:
+                return Response(
+                    ResponseHelper.error_response(
+                        message="Invalid OAuth configuration"
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
             
             accept_header = request.headers.get('Accept', '')
@@ -59,6 +68,80 @@ class GoogleAuthInitiateView(APIView):
 class GoogleAuthCallbackView(APIView):
     permission_classes = [AllowAny]
     
+    @swagger_auto_schema(
+        operation_description="Handle Google OAuth callback",
+        manual_parameters=[
+            openapi.Parameter(
+                'code',
+                openapi.IN_QUERY,
+                description="Authorization code from Google",
+                type=openapi.TYPE_STRING,
+                required=True,
+                example="4/0ATX87lM_6Ah8I3HEywy75v2j_GIHrKnrVzToIv1x1tOzLM4dxh1m9OO3lpZ-mBCLyPxSyQ"
+            ),
+            openapi.Parameter(
+                'error',
+                openapi.IN_QUERY,
+                description="Error from Google (if any)",
+                type=openapi.TYPE_STRING,
+                required=False,
+                example="access_denied"
+            )
+        ],
+        responses={
+            200: openapi.Response(
+                description='User authentication successful',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'data': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'user_id': openapi.Schema(type=openapi.TYPE_STRING),
+                                'email': openapi.Schema(type=openapi.TYPE_STRING),
+                                'name': openapi.Schema(type=openapi.TYPE_STRING)
+                            }
+                        )
+                    }
+                )
+            ),
+            400: openapi.Response(
+                description='Missing code or Google error',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'errors': openapi.Schema(type=openapi.TYPE_OBJECT)
+                    }
+                )
+            ),
+            401: openapi.Response(
+                description='Invalid or expired authorization code',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'errors': openapi.Schema(type=openapi.TYPE_OBJECT)
+                    }
+                )
+            ),
+            500: openapi.Response(
+                description='Provider error or internal server error',
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'errors': openapi.Schema(type=openapi.TYPE_OBJECT)
+                    }
+                )
+            )
+        }
+    )
     def get(self, request):
         """Handle Google OAuth callback"""
         code = request.GET.get('code')
@@ -83,7 +166,7 @@ class GoogleAuthCallbackView(APIView):
             )
         
         try:
-           
+            
             token_data = GoogleAuthHelper.exchange_code_for_token(code)
             if not token_data:
                 logger.error("Failed to exchange code for token")
@@ -94,7 +177,7 @@ class GoogleAuthCallbackView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED
                 )
             
-            
+           
             user_info = GoogleAuthHelper.get_user_info(token_data['access_token'])
             if not user_info:
                 logger.error("Failed to fetch user info from Google")
@@ -105,7 +188,7 @@ class GoogleAuthCallbackView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
             
-            
+           
             with db_transaction.atomic():
                 user, created = User.objects.update_or_create(
                     google_id=user_info.get('sub'),
